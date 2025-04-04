@@ -1,55 +1,84 @@
-from flask import Flask, render_template, redirect, url_for, request, flash
+import os
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # Replace with a secure secret key
+CORS(app, origins=["http://localhost:3000"])  
 
-# Dummy event data
-events = [
-    {'title': 'Music Concert', 'date': '2025-04-15', 'location': 'Guretha', 'description': 'A live music concert featuring local bands.'},
-    {'title': 'Food Festival', 'date': '2025-04-20', 'location': 'Guretha', 'description': 'Taste food from all around the world!'},
-    {'title': 'Tech Talk', 'date': '2025-04-22', 'location': 'Guretha', 'description': 'Join industry experts for a talk on the latest in tech.'},
-    # Add more events as needed
-]
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY")
+app.config["JWT_SECRET_KEY"] = os.getenv("SECRET_KEY")  
 
-# Route for the homepage
-@app.route('/')
+client = MongoClient(os.getenv("MONGO_URI"))
+db = client["ticket_bazar"]
+users_collection = db["users"]
+tickets_collection = db["tickets"]
+
+jwt = JWTManager(app)
+
+limiter = Limiter(get_remote_address, app=app, default_limits=["100 per hour"])
+
+@app.route("/", methods=["GET"])
+@limiter.limit("10 per minute") 
 def home():
-    return render_template('front.html')
+    return jsonify({"message": "Welcome to Secure Ticket Bazar API!"})
 
-# Route for the login page
-@app.route('/login', methods=['GET', 'POST'])
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.json
+    if not data.get("username") or not data.get("password"):
+        return jsonify({"error": "Username and password are required"}), 400
+
+    if users_collection.find_one({"username": data["username"]}):
+        return jsonify({"error": "Username already exists"}), 400
+
+    user = {
+        "username": data["username"],
+        "password": data["password"] 
+    }
+    users_collection.insert_one(user)
+    return jsonify({"message": "User registered successfully!"}), 201
+
+@app.route("/login", methods=["POST"])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        
-        # For simplicity, we'll just check if the username and password match a hardcoded value
-        if username == 'user' and password == 'password':
-            flash('Login successful!', 'success')
-            return redirect(url_for('home'))
-        else:
-            flash('Invalid credentials, please try again.', 'danger')
-    
-    return render_template('login.html')
+    data = request.json
+    user = users_collection.find_one({"username": data.get("username")})
 
-# Route for the signup page
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        email = request.form['email']
-        
-        # Here, you would normally save the user data to a database
-        flash('Signup successful! Please login to continue.', 'success')
-        return redirect(url_for('login'))
-    
-    return render_template('signup.html')
+    if not user or user["password"] != data.get("password"): 
+        return jsonify({"error": "Invalid credentials"}), 401
 
-# Route for the All Events page
-@app.route('/allevents')
-def allevents():
-    return render_template('allevents.html', events=events)
+    access_token = create_access_token(identity=data["username"])
+    return jsonify({"access_token": access_token})
 
-if __name__ == '__main__':
+@app.route("/add_ticket", methods=["POST"])
+@jwt_required()  
+def add_ticket():
+    data = request.json
+    if not data.get("title") or not data.get("price"):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    current_user = get_jwt_identity()  
+
+    ticket = {
+        "title": data["title"],
+        "price": float(data["price"]),
+        "seller": current_user,
+        "status": "available"
+    }
+    tickets_collection.insert_one(ticket)
+    return jsonify({"message": "Ticket added successfully!"}), 201
+
+@app.route("/tickets", methods=["GET"])
+@limiter.limit("5 per second")  
+def get_tickets():
+    tickets = list(tickets_collection.find({}, {"_id": 0}))
+    return jsonify(tickets)
+
+if __name__ == "__main__":
     app.run(debug=True)

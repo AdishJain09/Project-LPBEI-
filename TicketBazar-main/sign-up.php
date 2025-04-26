@@ -17,7 +17,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Get user input from the form
     $email = $_POST["email"];
     $username = $_POST["username"];
-    $password = $_POST["password"]; // In a real application, you would hash this!
+    $plain_password = $_POST["password"]; // Get the plain password
 
     // Basic email validation
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -26,7 +26,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         exit();
     }
 
-    // Check if the username or email already exists (for demonstration, you might skip this in a basic setup)
+    // Hash the password securely
+    $hashed_password = password_hash($plain_password, PASSWORD_DEFAULT);
+
+    // Check if the username or email already exists
     $sql_check = "SELECT id FROM users WHERE email='$email' OR username='$username'";
     $result_check = $conn->query($sql_check);
 
@@ -35,7 +38,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     } else {
         // Prepare and bind the SQL statement to prevent SQL injection
         $stmt = $conn->prepare("INSERT INTO users (email, username, password) VALUES (?, ?, ?)");
-        $stmt->bind_param("sss", $email, $username, $password); // "sss" indicates three string parameters
+        $stmt->bind_param("sss", $email, $username, $hashed_password); // Store the hashed password
 
         if ($stmt->execute()) {
             echo "Account created successfully!";
